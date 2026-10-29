@@ -1,298 +1,216 @@
-# ParlaCAP — Classification de discours parlementaires avec des Transformers
+# ParlaCAP — Classifying French Parliamentary Speeches with Transformers
 
-**Projet universitaire en binôme · TAL / NLP · Université Grenoble Alpes**
+**University NLP project · Two-person team · Université Grenoble Alpes**
 
-**Réalisé par Zohré Shafiee et Camille Benoit-Guyod.**
+**Authors: Zohré Shafiee and Camille Benoit-Guyod**
 
-Ce dépôt contient les scripts de plusieurs expériences de classification supervisée de discours parlementaires français, ainsi que le rapport de résultats. Les chiffres rapportés sont ceux de nos essais universitaires et n'ont pas été recalculés lors de la publication sur GitHub.
+## Project overview
 
-## Description
+We trained and compared Transformer-based classifiers to **predict the political party associated with a French parliamentary speech**, using the `text` and `speaker_party` fields from the ParlaCAP corpus. This is a supervised **multiclass text classification** task, not an attempt to infer an individual's personal political beliefs.
 
-L'objectif de ce projet est d'entraîner un modèle Transformers sur des échanges parlementaires en français afin de les associer à des partis politiques.
+The project explores the effects of dataset cleaning, class imbalance, model choice, sequence length and training duration. Five experiments were conducted with **DistilCamemBERT** and **CamemBERT-base**.
 
-## Installation
+The source scripts and recorded results are included here. **The reported metrics come from our university runs; they have not been independently rerun for this public repository.**
 
-### Dépendances
+## Dataset and preparation
 
-Bibliothèques utilisées :
+The dataset contains French parliamentary speeches dated **2015–2022**, provided as a TSV file with speech text, speaker and party metadata.
 
-- **transformers** : fournit les outils pour la tokénisation, la classification et l'entraînement du modèle.
-- **datasets** : charge les données.
-- **evaluate** : évalue quantitativement le modèle.
-- **accelerate** : optimise le calcul.
-- **numpy** : fournit des fonctions mathématiques.
-- **scikit-learn** : permet de produire un rapport détaillé par classe.
-- **torch** : permet l'entraînement du modèle avec PyTorch.
-- **sentencepiece** et **protobuf** : nécessaires au chargement de certains modèles/tokeniseurs.
+**Dataset source:** https://data.crossda.hr/file.xhtml?persistentId=doi:10.23669/1ZTELP/TRB27P&version=1.0
 
-### Notes d'installation
+The original dataset is **not distributed in this repository**.
 
-Pour installer les dépendances, lancez la commande suivante :
+### Processing pipeline
 
-```bash
-pip install transformers datasets evaluate accelerate numpy scikit-learn torch sentencepiece protobuf
+1. Read `parlacap.tsv` and select speech text and the speaker's party.
+2. Remove missing or `-` party labels.
+3. Exclude speeches with **15 words or fewer**.
+4. In the later experiments, group parties representing **less than 5%** of the retained data into `AUTRE` ("Other").
+5. Convert party names into integer class labels.
+6. In experiments 2–5, perform an **80/20 stratified train/evaluation split** using seed 42.
+7. Tokenize with the pretrained model's tokenizer, truncate to the configured length and apply dynamic padding.
+8. Fine-tune a sequence classification model and calculate **accuracy** and **macro-averaged F1**.
+
+```text
+ParlaCAP TSV
+     |
+     v
+Clean speech texts and party labels
+     |
+     v
+Group low-frequency parties (later versions)
+     |
+     v
+Encode labels + 80/20 split
+     |
+     v
+DistilCamemBERT / CamemBERT tokenizer
+     |
+     v
+Fine-tune Transformer classifier
+     |
+     v
+Accuracy + macro-F1 + class-level report
 ```
 
-## API
+### Data overview
 
-| Fonction | Entrée(s) | Sortie(s) | Description |
-|---|---|---|---|
-| `compute_metrics` | `eval_pred(logits, labels)` | `dict(accuracy, f1_macro)` | Renvoie la précision et la F-mesure macro |
-| `preprocess_function` | `examples` contenant le texte brut | `dict(tokens)` | Tokénise le texte et convertit les séquences en identifiants numériques |
-| `group_small_parties` | `example(row)` | `example(modifié)` | Regroupe les partis dont la fréquence est inférieure au seuil choisi, par exemple 5 % |
+| Measure | Before cleaning | After cleaning |
+|---|---:|---:|
+| Speeches | 714,439 | 262,257 |
+| Share retained | — | 36.7% |
+| Median length | 13 words | 72 words |
+| Party categories | 18 | 7 |
 
-## Tests
+After cleaning, the seven label categories were:
 
-Les tests ont été effectués sur les serveurs de l'UGA.
+| Party | Share |
+|---|---:|
+| LAREM | 32.49% |
+| LR | 23.37% |
+| AUTRE | 16.08% |
+| FI | 9.63% |
+| SOC | 6.85% |
+| GDR | 6.13% |
+| MODEM | 5.45% |
 
-### Premier test
+The original data also included entries with missing or unspecified party labels (approximately 15.15% labeled `-`). A rough token-count estimate in the exploratory analysis suggested **5.01%** of cleaned speeches would exceed 512 tokens. This was an **estimate based on word counts**, not a direct measurement with the final tokenizer.
 
-Le premier test a été effectué avec le modèle **cmarkea/distilcamembert-base**, une version allégée de CamemBERT. Le modèle a été entraîné sur **3 époques**. Dans cette première version, le seuil de regroupement des petits partis était fixé à **2 %**.
+## Model architectures and training
 
-Résultats obtenus :
+All experiments used Hugging Face `transformers`, `datasets`, `evaluate` and PyTorch-based training.
 
-- **précision = 54,06 %**
-- **F1 macro = 29,16 %**
-- **perte d'évaluation = 1,426**
+- **DistilCamemBERT:** `cmarkea/distilcamembert-base` (experiments 1–2).
+- **CamemBERT-base:** `camembert-base` (experiments 3–5).
+- Learning rate: `2e-5`; training batch size: `8`; evaluation batch size: `8`; weight decay: `0.01`.
+- Most configurations used **three epochs**; experiment 5 used **four**.
+- Later configurations selected the best checkpoint using **macro-F1**.
 
-La précision indique que le modèle attribue correctement la classe dans un peu plus d'un cas sur deux. Cependant, le F1 macro est faible. Cela montre que les performances ne sont pas équilibrées entre les classes : le modèle semble surtout mieux reconnaître les classes majoritaires, tandis que les classes minoritaires sont beaucoup moins bien prédites.
+Tokenization produces input IDs and attention masks; `DataCollatorWithPadding` pads examples in each batch. Model logits are mapped to the class with the highest score, and predictions are compared with reference labels.
 
-Ce résultat ne semble pas principalement dû à un surapprentissage, car l'écart entre la perte d'entraînement et la perte d'évaluation reste limité. Le problème principal est plutôt le déséquilibre des classes.
+### Five experiments
 
-### Second test
-
-Ce test s'est également réalisé sur **3 époques** avec **cmarkea/distilcamembert-base**.
-
-Paramètres modifiés par rapport à l'essai précédent :
-
-- le seuil de regroupement des petits partis est passé de **2 % à 5 %** ;
-- les petits partis ont été regroupés dans une catégorie **AUTRE** ;
-- le découpage train/test a été fait de manière stratifiée, afin de conserver la proportion des classes ;
-- le modèle sélectionne la meilleure version selon le **F1 macro** ;
-- la longueur maximale des séquences a été fixée à **256 tokens**.
-
-Résultats obtenus :
-
-- **précision = 53,67 %**
-- **F1 macro = 43,52 %**
-- **perte d'évaluation = 1,262**
-
-La précision reste proche de celle du premier test. En revanche, le F1 macro augmente nettement. Cela montre que le modèle est devenu plus performant sur les classes moins représentées, même si la précision globale n'a pas beaucoup changé.
-
-### Troisième test
-
-Le troisième test a été effectué avec **camembert-base**, un modèle plus lourd et plus performant que DistilCamemBERT. La longueur maximale des séquences a aussi été augmentée à **512 tokens**, afin de donner plus de contexte au modèle.
-
-Le modèle a été entraîné sur **3 époques**.
-
-Résultats obtenus :
-
-- **précision = 56,41 %**
-- **F1 macro = 47,25 %**
-- **perte d'évaluation = 1,236**
-
-Cette version améliore à la fois la précision et le F1 macro. Le modèle semble donc mieux exploiter les indices linguistiques et thématiques présents dans les discours.
-
-Un rapport détaillé par classe a été généré dans `rapport_v3.txt`. Il montre cependant que les résultats restent très inégaux selon les classes. Les classes les mieux reconnues sont notamment **LAREM**, **FI** et **LR**. En revanche, **MODEM** et **SOC** obtiennent des scores plus faibles, notamment au niveau du rappel, ce qui montre que le modèle reconnaît difficilement les discours appartenant à ces partis.
-
-En dehors du déséquilibre du corpus, cette différence pourrait s'expliquer par des proximités thématiques entre certains partis, qui les rendent difficiles à différencier. Il est aussi possible qu'un certain nombre de discours soient trop neutres et ne contiennent donc pas d'indices explicites permettant au modèle de les labéliser correctement.
-
-### Quatrième test
-
-Le quatrième test reprend la configuration du troisième test, mais ajoute une **pondération personnalisée des classes**.
-
-L'objectif était de compenser la faible fréquence de certaines classes, afin de forcer le modèle à porter plus d'attention aux petits partis, comme MODEM, SOC ou GDR.
-
-Le modèle a été entraîné sur **3 époques**.
-
-Résultats obtenus :
-
-- **précision = 51,14 %**
-- **F1 macro = 47,35 %**
-- **perte d'évaluation = 1,413**
-
-La pondération des classes n'a pas réellement amélioré les performances globales. Le F1 macro reste presque stable, mais la précision diminue. Cela suggère que le modèle prend davantage de risques sur les petites classes, mais au détriment des prédictions globales.
-
-Cette expérimentation n'a donc pas été retenue comme meilleure configuration.
-
-### Cinquième test
-
-Le cinquième test reprend la meilleure configuration précédente, c'est-à-dire **camembert-base** avec une longueur maximale de **512 tokens**, mais le nombre d'époques a été augmenté de **3 à 4**.
-
-La pondération personnalisée des classes n'a pas été conservée.
-
-Résultats obtenus :
-
-- **précision = 56,69 %**
-- **F1 macro = 48,29 %**
-- **perte d'évaluation = 1,333**
-
-C'est avec cet essai que nous avons obtenu les meilleurs scores globaux. L'amélioration reste légère, mais le F1 macro augmente par rapport au troisième test. Nous retenons donc ce cinquième test comme le meilleur compromis entre précision et F1 macro.
-
-### Tableau récapitulatif des tests
-
-| Test | Dossier | Modèle | Époques | Précision | F1 macro | Perte d'évaluation |
+| Experiment | Script | Model | Epochs | Accuracy | Macro-F1 | Evaluation loss |
 |---|---|---|---:|---:|---:|---:|
-| Test 1 | `output` | DistilCamemBERT | 3 | 0.5406 | 0.2916 | 1.4264 |
-| Test 2 | `output_v2` | DistilCamemBERT | 3 | 0.5368 | 0.4352 | 1.2625 |
-| Test 3 | `output_v3` | CamemBERT-base | 3 | 0.5641 | 0.4725 | 1.2364 |
-| Test 4 | `output_v4` | CamemBERT-base + pondération | 3 | 0.5114 | 0.4735 | 1.4133 |
-| Test 5 | `output_v5` | CamemBERT-base | 4 | 0.5669 | 0.4829 | 1.3327 |
+| 1 | `projetpython.py` | DistilCamemBERT | 3 | 54.06% | 29.16% | 1.4264 |
+| 2 | `projetpython_v2.py` | DistilCamemBERT | 3 | 53.68% | 43.52% | 1.2625 |
+| 3 | `projetpython_v3.py` | CamemBERT-base | 3 | 56.41% | 47.25% | 1.2364 |
+| 4 | `projetpython_v4.py` | CamemBERT-base, weighted loss | 3 | 51.14% | 47.35% | 1.4133 |
+| 5 | `projetpython_v5.py` | CamemBERT-base | 4 | **56.69%** | **48.29%** | 1.3327 |
 
-### Conclusion
+These results were taken from the team's experiment notes and are **not new measurements**.
 
-Tous ces tests nous ont permis d'affiner les paramètres du modèle. Les améliorations les plus efficaces ont été le passage de **DistilCamemBERT** à **CamemBERT-base**, l'augmentation de la longueur maximale des séquences à **512 tokens**, le regroupement des petits partis dans une catégorie **AUTRE**, et l'utilisation d'un découpage stratifié.
+#### Experiment 1 — Initial baseline
 
-La meilleure configuration obtenue est celle du cinquième test, avec **camembert-base**, `max_length=512` et **4 époques**. Elle atteint environ **56,69 % de précision** et **48,29 % de F1 macro**.
+The first run fine-tuned DistilCamemBERT for three epochs. The original experiment notes describe a **2% threshold** for grouping rare parties; the recovered first-version script does **not** implement that grouping. This discrepancy should be kept in mind when attempting to reproduce the historical run.
 
-Cependant, les performances restent limitées. Cela s'explique principalement par le fort déséquilibre des classes, l'hétérogénéité de la catégorie **AUTRE**, et la proximité thématique entre certains partis politiques. Pour améliorer davantage le modèle, il faudrait probablement travailler plus finement sur le nettoyage des données, la constitution des classes et éventuellement tester d'autres stratégies d'échantillonnage.
+The initial macro-F1 of **29.16%** was considerably lower than its **54.06% accuracy**, suggesting uneven performance across party classes.
 
-## Bugs identifiés
+#### Experiment 2 — Better class handling
 
-Lors de la génération du rapport détaillé, un script a d'abord planté à cause d'un problème d'encodage de caractères non ASCII. Le problème a été résolu en exécutant le script avec `python3` dans l'environnement virtuel du projet.
+We moved the rare-party grouping threshold to **5%**, created an `AUTRE` category, used a **stratified split**, selected the best checkpoint by macro-F1 and limited inputs to **256 tokens**.
 
-## Structure des données
+Macro-F1 increased to **43.52%**, while accuracy remained close to the first result. This suggests that balancing the label definition improved average class-level performance without a similar improvement in overall accuracy.
 
-### Dataset avant et après tokénisation
+#### Experiment 3 — CamemBERT and longer inputs
 
-**Données brutes avant tokénisation**
+We switched to **CamemBERT-base** and increased the maximum length to **512 tokens**, training for three epochs.
 
-Notre dataset contient des discours parlementaires enregistrés en France entre 2015 et 2022.
+Accuracy reached **56.41%** and macro-F1 **47.25%**.
 
-Lien vers le dataset :  
-https://data.crossda.hr/file.xhtml?persistentId=doi:10.23669/1ZTELP/TRB27P&version=1.0
+The detailed `rapport_v3.txt` report shows marked class differences:
 
-Le dataset est au format `.tsv` et contient des colonnes de métadonnées : identifiant du discours, date, langue, nom du locuteur, parti politique, texte, etc. Pour l'entraînement du modèle, nous avons retenu principalement la colonne `speaker_party`, qui correspond au parti politique du locuteur, et la colonne `text`, qui contient le texte du discours.
+| Party | Precision | Recall | F1 |
+|---|---:|---:|---:|
+| AUTRE | 0.47 | 0.40 | 0.44 |
+| FI | 0.72 | 0.52 | 0.60 |
+| GDR | 0.50 | 0.48 | 0.49 |
+| LAREM | 0.61 | 0.80 | 0.69 |
+| LR | 0.52 | 0.58 | 0.55 |
+| MODEM | 0.55 | 0.14 | 0.22 |
+| SOC | 0.44 | 0.24 | 0.31 |
 
-Après analyse du jeu de données par un script Python, on obtient les statistiques suivantes.
+The report contains **52,452 evaluation examples**. LAREM had relatively high recall, while MODEM and SOC were harder to identify. Topic overlap, class imbalance and speeches without strongly discriminative linguistic clues are possible explanations, not proven causal findings.
 
-**Statistiques avant nettoyage**
+#### Experiment 4 — Class-weighted loss
 
-| Métrique | Données brutes |
-|:---:|:---:|
-| Nb total de discours | 714,439 |
-| Longueur médiane discours | 13 mots |
+We implemented a custom `WeightedTrainer` using PyTorch `CrossEntropyLoss(weight=...)` to give less frequent classes greater weight.
 
-Pour la répartition des classes :
+Macro-F1 was **47.35%** and accuracy **51.14%**. This experiment did not provide a clear overall improvement over experiment 3 and was not chosen as the preferred setting.
 
-| Parti | Proportion [%] |
-|:---:|:---:|
-| LAREM | 29.11 |
-| LR | 23.30 |
-| - | 15.15 |
-| FI | 5.96 |
-| SOC | 5.55 |
-| MODEM | 5.19 |
-| GDR | 4.52 |
-| DEM | 2.90 |
-| UDI-AGIR | 2.85 |
-| LT | 1.98 |
-| NG | 1.28 |
-| UDI-I | 0.69 |
-| AGIR-E | 0.44 |
-| UDI-A-I | 0.31 |
-| LC | 0.31 |
-| UDI-I | 0.30 |
-| EDS | 0.13 |
-| RE | 0.00 |
+#### Experiment 5 — Four training epochs
 
-=> 18 classes au total
+We returned to the unweighted CamemBERT-base configuration with 512-token inputs and increased training from **three to four epochs**.
 
-Avec ces statistiques sur le dataset brut, on peut voir qu'il était nécessaire de faire un nettoyage :
+This produced the best **reported overall combination**: **56.69% accuracy**, **48.29% macro-F1** and **1.3327 evaluation loss**.
 
-- pour éliminer les prises de parole trop courtes ;
-- pour éliminer les discours sans parti politique associé ;
-- pour réduire le fort déséquilibre des classes.
+The F1 gain over experiment 3 was modest; improvements should not be overstated.
 
-Tous les discours d'une longueur inférieure à 15 mots ont été filtrés. Les discours sans parti politique associé ont aussi été supprimés. Dans les dernières expériences, les partis politiques dont la proportion était inférieure à **5 %** ont été regroupés dans une catégorie **AUTRE**.
+## Files
 
-**Statistiques après nettoyage**
+```text
+.
+├── README.md
+├── clean_data.py         # Dataset exploration and cleaning statistics
+├── projetpython.py       # First DistilCamemBERT configuration
+├── projetpython_v2.py    # Class grouping and stratified split
+├── projetpython_v3.py    # CamemBERT-base, 512 tokens
+├── projetpython_v4.py    # Custom class-weighted training loss
+├── projetpython_v5.py    # CamemBERT-base, four epochs
+├── rapport_v3.txt        # Experiment 3 per-class classification report
+└── code.ipynb            # Earlier Google Colab starter notebook
+```
 
-Ces statistiques ont été calculées avec le script `clean_data.py`.
+The Python scripts are the recovered experimentation code. The older `code.ipynb` contains only initial Colab setup and does not replace them.
 
-| Métrique | Stats |
-|:---:|:---:|
-| Nb total de discours | 262,257 |
-| % de données conservées | 36.7 % |
-| Longueur médiane discours | 72 mots |
+## Installation and running an experiment
 
-| Parti | Proportion [%] |
-|:---:|:---:|
-| LAREM | 32.49 |
-| LR | 23.37 |
-| AUTRE | 16.08 |
-| FI | 9.63 |
-| SOC | 6.85 |
-| GDR | 6.13 |
-| MODEM | 5.45 |
+Install Python and the relevant packages:
 
-=> 7 classes après nettoyage
+```bash
+python -m pip install transformers datasets evaluate accelerate numpy scikit-learn torch sentencepiece protobuf pandas
+```
 
-Il faut aussi tenir compte du fait que le modèle ne regarde entièrement que les textes d'une longueur inférieure à **512 tokens**. Après calcul, seules **5.01 %** de nos données nettoyées étaient tronquées par cette limite, ce qui semble acceptable.
-
-Le dataset nettoyé a ensuite été divisé avec **80 % des données pour l'entraînement** et **20 % pour le test**. Le découpage a été effectué de manière stratifiée, afin de conserver la proportion des classes dans les deux ensembles.
-
-**Après tokénisation**
-
-L'algorithme de tokénisation utilisé dépend du modèle choisi. Les premiers essais utilisent DistilCamemBERT, une version plus légère du modèle CamemBERT pour le français. Les derniers essais utilisent CamemBERT-base, afin d'obtenir de meilleurs résultats.
-
-En sortie du tokéniseur, on obtient une liste de tokens convertis en identifiants numériques. Cette liste est ensuite passée dans une fonction de préparation des données, qui applique un padding pour que toutes les séquences d'un batch aient une longueur compatible. Un `attention_mask` est aussi ajouté afin d'indiquer au modèle les éléments de padding à ignorer.
-
-Enfin, les labels sont associés aux séquences pour permettre au modèle d'apprendre à prédire le parti politique du locuteur.
-
-### Sorties du modèle
-
-Les résultats bruts du modèle sortent sous forme de logits, organisés en tenseur. Ces nombres donnent pour chaque classe la force de prédiction : plus la valeur est élevée, plus il est probable que l'input appartienne à cette classe.
-
-Dans notre cas, le tenseur de sortie a pour taille `[8, 7]` lorsque le batch size est de 8 : 8 exemples dans le batch et 7 classes possibles. Une ligne contient donc les scores d'un exemple pour chaque classe.
-
-Pour obtenir la prédiction finale, on sélectionne la classe qui possède le score le plus élevé. Les métriques sont ensuite calculées à partir de ces prédictions et des labels attendus.
-
-### Fonctions
-
-Les fonctions utilisées servent à transformer les données pour les rendre utilisables par le modèle :
-
-- `group_small_parties` réduit le nombre de classes afin de rendre la distribution plus équilibrée ;
-- `preprocess_function` convertit l'input, sous forme de chaînes de caractères, en identifiants numériques compréhensibles par le modèle ;
-- `compute_metrics` traite la sortie du modèle pour obtenir les métriques de performance, notamment la précision et le F1 macro.
-
-### Évaluation de la complexité
-
-Le modèle repose sur une architecture de type Transformer. Dans ce type de modèle, le mécanisme d'attention compare les tokens d'une séquence entre eux. Pour une séquence de longueur `n`, cette opération a une complexité approximative de `O(n²)`.
-
-Comme cette opération est répétée pour un grand nombre de discours, on peut estimer la complexité globale à `O(N × n²)`, avec `N` le nombre de discours et `n` la longueur maximale des séquences.
-
-## Fichiers du dépôt
-
-- `clean_data.py` : exploration et statistiques du corpus avant/après filtrage ; script initialement utilisé dans Google Colab.
-- `projetpython.py` : première configuration DistilCamemBERT, sans regroupement des petits partis.
-- `projetpython_v2.py` : regroupement des partis minoritaires, échantillonnage stratifié et limitation à 256 tokens.
-- `projetpython_v3.py` : passage à CamemBERT-base, longueur maximale de 512 tokens.
-- `projetpython_v4.py` : variante avec fonction de perte pondérée selon les classes.
-- `projetpython_v5.py` : CamemBERT-base entraîné sur quatre époques.
-- `rapport_v3.txt` : métriques détaillées par classe pour l'expérience v3.
-- `code.ipynb` : ancien notebook d'amorçage Colab ; les scripts Python ci-dessus contiennent les expériences retrouvées.
-
-## Reproduire les expériences
-
-1. Installer Python et les bibliothèques indiquées dans la section Installation.
-2. Télécharger le jeu de données ParlaCAP depuis le lien indiqué ci-dessus et respecter ses conditions d'utilisation.
-3. Placer le fichier `parlacap.tsv` dans le répertoire de travail ou adapter son chemin dans les scripts.
-4. Lancer le script de la configuration souhaitée, par exemple :
+Download the source dataset and place `parlacap.tsv` in the working directory. Then run one of the experiment scripts:
 
 ```bash
 python projetpython_v5.py
 ```
 
-**À noter :** le corpus `parlacap.tsv` n'est pas inclus dans ce dépôt. Les expériences nécessitent le téléchargement du corpus et des modèles préentraînés, ainsi que des ressources de calcul adaptées. Les scripts sont publiés comme fichiers de recherche universitaires, et non comme pipeline de production entièrement validé.
+To explore dataset statistics:
 
-## Points méthodologiques à connaître
+```bash
+python clean_data.py
+```
 
-- Le code fourni utilise une séparation `train/test` à 80/20. Certaines configurations utilisent l'ensemble de test pendant l'entraînement pour choisir le meilleur modèle (`load_best_model_at_end`). Les performances rapportées ne doivent donc **pas** être présentées comme une évaluation finale sur un ensemble de test indépendant : une séparation supplémentaire validation/test serait nécessaire pour cela.
-- Les groupes parlementaires et leurs fréquences dépendent du corpus et des critères de nettoyage ; les comparaisons de scores doivent en tenir compte.
-- La catégorie `AUTRE` regroupe des partis hétérogènes et peut compliquer l'interprétation des prédictions.
-- Les chiffres du rapport décrivent les résultats consignés par l'équipe ; aucune réexécution ni nouvelle validation des expériences n'a été effectuée pour cette publication.
+**Note:** `clean_data.py` originated in Google Colab and contains a Google Drive file path; adjust it before running locally. The Transformer experiments require downloading pretrained models, access to the corpus and sufficient computation resources. Package versions and exact runtime environments were not pinned in the recovered files.
 
-## Crédits
+### Main functions
 
-Ce projet a été réalisé **en binôme par Zohré Shafiee et Camille Benoit-Guyod**, dans le cadre du cursus universitaire en TAL à l'Université Grenoble Alpes. Le code, les expérimentations et les résultats constituent un travail collaboratif.
+- `group_small_parties`: maps classes below the frequency threshold to `AUTRE`.
+- `preprocess_function`: tokenizes the input text and applies length limits.
+- `compute_metrics`: computes accuracy and macro-F1 from predictions and references.
+- `WeightedTrainer.compute_loss`: in experiment 4, substitutes a class-weighted cross-entropy loss.
+
+## Interpretation and methodological limitations
+
+**Evaluation leakage:** Experiments 2–5 use the split named `test` as the `eval_dataset` during training and for best-checkpoint selection (`load_best_model_at_end=True`). The reported scores are therefore **not a completely independent final test evaluation**. A more rigorous follow-up would use distinct training, validation and held-out test sets.
+
+Other limitations include:
+
+- The cleaned corpus still contains **substantial class imbalance**.
+- `AUTRE` contains politically heterogeneous parties.
+- Party membership is only a **dataset label**, not a complete characterization of speech content.
+- Long documents are **truncated**, potentially losing information.
+- Accuracy may hide poor minority-class recall; macro-F1 and per-class reporting help reveal it.
+- The repository contains experimental scripts rather than a fully packaged, version-pinned and independently reproduced research pipeline.
+
+An encoding-related issue was reported while generating the detailed classification report. The team resolved it by running the script with `python3` in the project's virtual environment.
+
+For a Transformer of sequence length `n`, self-attention has an approximate **O(n²)** cost in sequence length. Across `N` examples, a simplified attention-related cost is **O(N × n²)**, omitting other model operations and factors.
+
+## Team and credits
+
+**This project was carried out by two students: Zohré Shafiee and Camille Benoit-Guyod**, as part of the university NLP / Python coursework at Université Grenoble Alpes.
+
+The code, experimentation and results are collaborative academic work. This repository does not claim sole authorship of the project by either student.
