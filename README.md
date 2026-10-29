@@ -1,6 +1,8 @@
 # ParlaCAP — Classification de discours parlementaires avec des Transformers
 
-**Projet universitaire en équipe · TAL / NLP · Université Grenoble Alpes**
+**Projet universitaire en binôme · TAL / NLP · Université Grenoble Alpes**
+
+**Réalisé par Zohré Shafiee et Camille Benoit-Guyod.**
 
 Ce dépôt contient les scripts de plusieurs expériences de classification supervisée de discours parlementaires français, ainsi que le rapport de résultats. Les chiffres rapportés sont ceux de nos essais universitaires et n'ont pas été recalculés lors de la publication sur GitHub.
 
@@ -293,4 +295,4 @@ python projetpython_v5.py
 
 ## Crédits
 
-Travail réalisé en équipe dans le cadre du cursus universitaire en TAL. La présence de plusieurs scripts et de résultats expérimentaux dans ce dépôt ne signifie pas qu'ils ont été développés individuellement par une seule personne.
+Ce projet a été réalisé **en binôme par Zohré Shafiee et Camille Benoit-Guyod**, dans le cadre du cursus universitaire en TAL à l'Université Grenoble Alpes. Le code, les expérimentations et les résultats constituent un travail collaboratif.
